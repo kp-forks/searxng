@@ -4,14 +4,17 @@ Developer documentation
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents
 
    quickstart
+   rtm_asdf
    contribution_guide
-   engine_overview
-   offline_engines
+   extended_types
+   engines/index
+   result_types/index
+   templates
    search_api
-   plugins
+   plugins/index
+   answerers/index
    translation
    lxcdev
    makefile

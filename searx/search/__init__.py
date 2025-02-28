@@ -1,29 +1,30 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
 # pylint: disable=missing-module-docstring, too-few-public-methods
 
+# the public namespace has not yet been finally defined ..
+# __all__ = ["EngineRef", "SearchQuery"]
+
 import threading
-from copy import copy
 from timeit import default_timer
 from uuid import uuid4
 
-import flask
-import babel
+from flask import copy_current_request_context
 
-from searx import settings
-from searx.answerers import ask
-from searx.external_bang import get_bang_url
-from searx.results import ResultContainer
 from searx import logger
-from searx.plugins import plugins
-from searx.search.models import EngineRef, SearchQuery
+from searx import settings
+import searx.answerers
+import searx.plugins
 from searx.engines import load_engines
-from searx.network import initialize as initialize_network, check_network_configuration
+from searx.extended_types import SXNG_Request
+from searx.external_bang import get_bang_url
 from searx.metrics import initialize as initialize_metrics, counter_inc, histogram_observe_time
-from searx.search.processors import PROCESSORS, initialize as initialize_processors
+from searx.network import initialize as initialize_network, check_network_configuration
+from searx.results import ResultContainer
 from searx.search.checker import initialize as initialize_checker
-from searx.utils import detect_language
+from searx.search.models import SearchQuery
+from searx.search.processors import PROCESSORS, initialize as initialize_processors
 
+from .models import EngineRef, SearchQuery
 
 logger = logger.getChild('search')
 
@@ -40,57 +41,19 @@ def initialize(settings_engines=None, enable_checker=False, check_network=False,
         initialize_checker()
 
 
-def replace_auto_language(search_query: SearchQuery):
-    """
-    Do nothing except if `search_query.lang` is "auto".
-    In this case:
-    * the value "auto" is replaced by the detected language of the query.
-      The default value is "all" when no language is detected.
-    * `search_query.locale` is updated accordingly
-
-    Use :py:obj:`searx.utils.detect_language` with `only_search_languages=True` to keep
-    only languages supported by the engines.
-    """
-    if search_query.lang != 'auto':
-        return
-
-    detected_lang = detect_language(search_query.query, threshold=0.3, only_search_languages=True)
-    if detected_lang is None:
-        # fallback to 'all' if no language has been detected
-        search_query.lang = 'all'
-        search_query.locale = None
-        return
-    search_query.lang = detected_lang
-    try:
-        search_query.locale = babel.Locale.parse(search_query.lang)
-    except babel.core.UnknownLocaleError:
-        search_query.locale = None
-
-
 class Search:
     """Search information container"""
 
     __slots__ = "search_query", "result_container", "start_time", "actual_timeout"
 
     def __init__(self, search_query: SearchQuery):
-        """Initialize the Search
-
-        search_query is copied
-        """
+        """Initialize the Search"""
         # init vars
         super().__init__()
+        self.search_query = search_query
         self.result_container = ResultContainer()
         self.start_time = None
         self.actual_timeout = None
-        self.search_query = copy(search_query)
-        self.update_search_query(self.search_query)
-
-    def update_search_query(self, search_query: SearchQuery):
-        """Update search_query.
-
-        call replace_auto_language to replace the "auto" language
-        """
-        replace_auto_language(search_query)
 
     def search_external_bang(self):
         """
@@ -107,17 +70,10 @@ class Search:
         return False
 
     def search_answerers(self):
-        """
-        Check if an answer return a result.
-        If yes, update self.result_container and return True
-        """
-        answerers_results = ask(self.search_query)
 
-        if answerers_results:
-            for results in answerers_results:
-                self.result_container.extend('answer', results)
-            return True
-        return False
+        results = searx.answerers.STORAGE.ask(self.search_query.query)
+        self.result_container.extend(None, results)
+        return bool(results)
 
     # do search-request
     def _get_requests(self):
@@ -127,7 +83,7 @@ class Search:
         # max of all selected engine timeout
         default_timeout = 0
 
-        # start search-reqest for all selected engines
+        # start search-request for all selected engines
         for engineref in self.search_query.engineref_list:
             processor = PROCESSORS[engineref.name]
 
@@ -179,8 +135,9 @@ class Search:
         search_id = str(uuid4())
 
         for engine_name, query, request_params in requests:
+            _search = copy_current_request_context(PROCESSORS[engine_name].search)
             th = threading.Thread(  # pylint: disable=invalid-name
-                target=PROCESSORS[engine_name].search,
+                target=_search,
                 args=(query, request_params, self.result_container, self.start_time, self.actual_timeout),
                 name=search_id,
             )
@@ -222,11 +179,11 @@ class Search:
 class SearchWithPlugins(Search):
     """Inherit from the Search class, add calls to the plugins."""
 
-    __slots__ = 'ordered_plugin_list', 'request'
+    __slots__ = 'user_plugins', 'request'
 
-    def __init__(self, search_query: SearchQuery, ordered_plugin_list, request: flask.Request):
+    def __init__(self, search_query: SearchQuery, request: SXNG_Request, user_plugins: list[str]):
         super().__init__(search_query)
-        self.ordered_plugin_list = ordered_plugin_list
+        self.user_plugins = user_plugins
         self.result_container.on_result = self._on_result
         # pylint: disable=line-too-long
         # get the "real" request to use it outside the Flask context.
@@ -238,14 +195,14 @@ class SearchWithPlugins(Search):
         self.request = request._get_current_object()
 
     def _on_result(self, result):
-        return plugins.call(self.ordered_plugin_list, 'on_result', self.request, self, result)
+        return searx.plugins.STORAGE.on_result(self.request, self, result)
 
     def search(self) -> ResultContainer:
-        if plugins.call(self.ordered_plugin_list, 'pre_search', self.request, self):
+
+        if searx.plugins.STORAGE.pre_search(self.request, self):
             super().search()
 
-        plugins.call(self.ordered_plugin_list, 'post_search', self.request, self)
-
+        searx.plugins.STORAGE.post_search(self.request, self)
         self.result_container.close()
 
         return self.result_container

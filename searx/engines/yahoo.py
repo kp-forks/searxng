@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
 """Yahoo Search (Web)
 
 Languages are supported by mapping the language to a domain.  If domain is not
@@ -17,6 +16,7 @@ from searx.utils import (
     eval_xpath_getindex,
     eval_xpath_list,
     extract_text,
+    html_to_text,
 )
 from searx.enginelib.traits import EngineTraits
 
@@ -133,17 +133,21 @@ def response(resp):
             continue
         url = parse_url(url)
 
-        title = eval_xpath_getindex(result, './/h3/a', 0, default=None)
-        if title is None:
-            continue
-        offset = len(extract_text(title.xpath('span')))
-        title = extract_text(title)[offset:]
-
+        title = eval_xpath_getindex(result, './/h3//a/@aria-label', 0, default='')
+        title: str = extract_text(title)
         content = eval_xpath_getindex(result, './/div[contains(@class, "compText")]', 0, default='')
-        content = extract_text(content, allow_none=True)
+        content: str = extract_text(content, allow_none=True)
 
         # append result
-        results.append({'url': url, 'title': title, 'content': content})
+        results.append(
+            {
+                'url': url,
+                # title sometimes contains HTML tags / see
+                # https://github.com/searxng/searxng/issues/3790
+                'title': " ".join(html_to_text(title).strip().split()),
+                'content': " ".join(html_to_text(content).strip().split()),
+            }
+        )
 
     for suggestion in eval_xpath_list(dom, '//div[contains(@class, "AlsoTry")]//table//a'):
         # append suggestion
@@ -164,7 +168,7 @@ def fetch_traits(engine_traits: EngineTraits):
 
     resp = network.get('https://search.yahoo.com/preferences/languages')
     if not resp.ok:
-        print("ERROR: response from peertube is not OK.")
+        print("ERROR: response from yahoo is not OK.")
 
     dom = html.fromstring(resp.text)
     offset = len('lang_')

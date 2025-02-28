@@ -1,30 +1,56 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
 """This module implements functions needed for the autocompleter.
 
 """
 # pylint: disable=use-dict-literal
 
 import json
-from urllib.parse import urlencode
+import html
+from urllib.parse import urlencode, quote_plus
 
-import lxml
+import lxml.etree
+import lxml.html
 from httpx import HTTPError
 
+from searx.extended_types import SXNG_Response
 from searx import settings
 from searx.engines import (
     engines,
     google,
 )
-from searx.network import get as http_get
+from searx.network import get as http_get, post as http_post
 from searx.exceptions import SearxEngineResponseException
 
 
-def get(*args, **kwargs):
+def update_kwargs(**kwargs):
     if 'timeout' not in kwargs:
         kwargs['timeout'] = settings['outgoing']['request_timeout']
     kwargs['raise_for_httperror'] = True
+
+
+def get(*args, **kwargs) -> SXNG_Response:
+    update_kwargs(**kwargs)
     return http_get(*args, **kwargs)
+
+
+def post(*args, **kwargs) -> SXNG_Response:
+    update_kwargs(**kwargs)
+    return http_post(*args, **kwargs)
+
+
+def baidu(query, _lang):
+    # baidu search autocompleter
+    base_url = "https://www.baidu.com/sugrec?"
+    response = get(base_url + urlencode({'ie': 'utf-8', 'json': 1, 'prod': 'pc', 'wd': query}))
+
+    results = []
+
+    if response.ok:
+        data = response.json()
+        if 'g' in data:
+            for item in data['g']:
+                results.append(item['q'])
+    return results
 
 
 def brave(query, _lang):
@@ -102,12 +128,24 @@ def google_complete(query, sxng_locale):
     )
     results = []
     resp = get(url.format(subdomain=google_info['subdomain'], args=args))
-    if resp.ok:
+    if resp and resp.ok:
         json_txt = resp.text[resp.text.find('[') : resp.text.find(']', -3) + 1]
         data = json.loads(json_txt)
         for item in data[0]:
             results.append(lxml.html.fromstring(item[0]).text_content())
     return results
+
+
+def mwmbl(query, _lang):
+    """Autocomplete from Mwmbl_."""
+
+    # mwmbl autocompleter
+    url = 'https://api.mwmbl.org/search/complete?{query}'
+
+    results = get(url.format(query=urlencode({'q': query}))).json()[1]
+
+    # results starting with `go:` are direct urls and not useful for auto completion
+    return [result for result in results if not result.startswith("go: ") and not result.startswith("search: ")]
 
 
 def seznam(query, _lang):
@@ -133,13 +171,16 @@ def seznam(query, _lang):
     ]
 
 
-def startpage(query, sxng_locale):
-    """Autocomplete from Startpage. Supports Startpage's languages"""
-    lui = engines['startpage'].traits.get_language(sxng_locale, 'english')
-    url = 'https://startpage.com/suggestions?{query}'
-    resp = get(url.format(query=urlencode({'q': query, 'segment': 'startpage.udog', 'lui': lui})))
-    data = resp.json()
-    return [e['text'] for e in data.get('suggestions', []) if 'text' in e]
+def stract(query, _lang):
+    # stract autocompleter (beta)
+    url = f"https://stract.com/beta/api/autosuggest?q={quote_plus(query)}"
+
+    resp = post(url)
+
+    if not resp.ok:
+        return []
+
+    return [html.unescape(suggestion['raw']) for suggestion in resp.json()]
 
 
 def swisscows(query, _lang):
@@ -172,7 +213,7 @@ def wikipedia(query, sxng_locale):
     results = []
     eng_traits = engines['wikipedia'].traits
     wiki_lang = eng_traits.get_language(sxng_locale, 'en')
-    wiki_netloc = eng_traits.custom['wiki_netloc'].get(wiki_lang, 'en.wikipedia.org')
+    wiki_netloc = eng_traits.custom['wiki_netloc'].get(wiki_lang, 'en.wikipedia.org')  # type: ignore
 
     url = 'https://{wiki_netloc}/w/api.php?{args}'
     args = urlencode(
@@ -205,15 +246,17 @@ def yandex(query, _lang):
 
 
 backends = {
+    'baidu': baidu,
+    'brave': brave,
     'dbpedia': dbpedia,
     'duckduckgo': duckduckgo,
     'google': google_complete,
-    'seznam': seznam,
-    'startpage': startpage,
-    'swisscows': swisscows,
+    'mwmbl': mwmbl,
     'qwant': qwant,
+    'seznam': seznam,
+    'stract': stract,
+    'swisscows': swisscows,
     'wikipedia': wikipedia,
-    'brave': brave,
     'yandex': yandex,
 }
 

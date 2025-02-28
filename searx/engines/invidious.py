@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
 """Invidious (Videos)
 """
 
 import time
 import random
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 from dateutil import parser
+
+from searx.utils import humanize_number
 
 # about
 about = {
@@ -75,6 +76,11 @@ def response(resp):
             else:
                 thumbnail = ""
 
+            # some instances return a partial thumbnail url
+            # we check if the url is partial, and prepend the base_url if it is
+            if thumbnail and not urlparse(thumbnail).netloc:
+                thumbnail = resp.search_params['base_url'] + thumbnail
+
             publishedDate = parser.parse(time.ctime(result.get("published", 0)))
             length = time.gmtime(result.get("lengthSeconds"))
             if length.tm_hour:
@@ -87,7 +93,8 @@ def response(resp):
                     "url": url,
                     "title": result.get("title", ""),
                     "content": result.get("description", ""),
-                    'length': length,
+                    "length": length,
+                    "views": humanize_number(result['viewCount']),
                     "template": "videos.html",
                     "author": result.get("author"),
                     "publishedDate": publishedDate,

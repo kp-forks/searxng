@@ -1,20 +1,53 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
-"""PostgreSQL database (offline)
+"""PostgreSQL is a powerful and robust open source database.  Before configuring
+the PostgreSQL engine, you must install the dependency ``psychopg2``.
+
+Example
+=======
+
+Below is an example configuration:
+
+.. code:: yaml
+
+   - name: my_database
+     engine: postgresql
+     database: my_database
+     username: searxng
+     password: password
+     query_str: 'SELECT * from my_table WHERE my_column = %(query)s'
+
+Implementations
+===============
 
 """
 
-# import error is ignored because the admin has to install mysql manually to use
-# the engine
-import psycopg2  # pyright: ignore # pylint: disable=import-error
+try:
+    import psycopg2  # type: ignore
+except ImportError:
+    # import error is ignored because the admin has to install postgresql
+    # manually to use the engine.
+    pass
 
 engine_type = 'offline'
+
 host = "127.0.0.1"
+"""Hostname of the DB connector"""
+
 port = "5432"
+"""Port of the DB connector"""
+
 database = ""
+"""Name of the database."""
+
 username = ""
+"""Username for the DB connection."""
+
 password = ""
+"""Password for the DB connection."""
+
 query_str = ""
+"""SQL query that returns the result items."""
+
 limit = 10
 paging = True
 result_template = 'key-value.html'

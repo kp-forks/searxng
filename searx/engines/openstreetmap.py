@@ -1,20 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
 """OpenStreetMap (Map)
 
 """
 
 import re
-from json import loads
-from urllib.parse import urlencode
+import urllib.parse
+
 from functools import partial
 
 from flask_babel import gettext
 
 from searx.data import OSM_KEYS_TAGS, CURRENCIES
-from searx.utils import searx_useragent
 from searx.external_urls import get_external_url
 from searx.engines.wikidata import send_wikidata_query, sparql_string_escape, get_thumbnail
+from searx.result_types import EngineResults
 
 # about
 about = {
@@ -38,8 +37,7 @@ search_string = 'search?{query}&polygon_geojson=1&format=jsonv2&addressdetails=1
 result_id_url = 'https://openstreetmap.org/{osm_type}/{osm_id}'
 result_lat_lon_url = 'https://www.openstreetmap.org/?mlat={lat}&mlon={lon}&zoom={zoom}&layers=M'
 
-route_url = 'https://graphhopper.com/maps/?point={}&point={}&locale=en-US&vehicle=car&weighting=fastest&turn_costs=true&use_miles=false&layer=Omniscale'  # pylint: disable=line-too-long
-route_re = re.compile('(?:from )?(.+) to (.+)')
+route_url = 'https://graphhopper.com/maps'
 
 wikidata_image_sparql = """
 select ?item ?itemLabel ?image ?sign ?symbol ?website ?wikipediaName
@@ -139,31 +137,38 @@ KEY_RANKS = {k: i for i, k in enumerate(KEY_ORDER)}
 
 
 def request(query, params):
-    """do search-request"""
-    params['url'] = base_url + search_string.format(query=urlencode({'q': query}))
-    params['route'] = route_re.match(query)
-    params['headers']['User-Agent'] = searx_useragent()
-    if 'Accept-Language' not in params['headers']:
-        params['headers']['Accept-Language'] = 'en'
+    params['url'] = base_url + search_string.format(query=urllib.parse.urlencode({'q': query}))
     return params
 
 
-def response(resp):
-    """get response from search-request"""
-    results = []
-    nominatim_json = loads(resp.text)
+def response(resp) -> EngineResults:
+    results = EngineResults()
+
+    nominatim_json = resp.json()
     user_language = resp.search_params['language']
 
-    if resp.search_params['route']:
-        results.append(
-            {
-                'answer': gettext('Get directions'),
-                'url': route_url.format(*resp.search_params['route'].groups()),
-            }
+    l = re.findall(r"from\s+(.*)\s+to\s+(.+)", resp.search_params["query"])
+    if not l:
+        l = re.findall(r"\s*(.*)\s+to\s+(.+)", resp.search_params["query"])
+    if l:
+        point1, point2 = [urllib.parse.quote_plus(p) for p in l[0]]
+
+        results.add(
+            results.types.Answer(
+                answer=gettext('Show route in map ..'),
+                url=f"{route_url}/?point={point1}&point={point2}",
+            )
         )
 
+    # simplify the code below: make sure extratags is a dictionary
+    for result in nominatim_json:
+        if not isinstance(result.get('extratags'), dict):
+            result["extratags"] = {}
+
+    # fetch data from wikidata
     fetch_wikidata(nominatim_json, user_language)
 
+    # create results
     for result in nominatim_json:
         title, address = get_title_address(result)
 
@@ -172,7 +177,7 @@ def response(resp):
             continue
 
         url, osm, geojson = get_url_osm_geojson(result)
-        img_src = get_thumbnail(get_img_src(result))
+        thumbnail = get_thumbnail(get_img_src(result))
         links, link_keys = get_links(result, user_language)
         data = get_data(result, user_language, link_keys)
 
@@ -185,7 +190,7 @@ def response(resp):
                 'url': url,
                 'osm': osm,
                 'geojson': geojson,
-                'img_src': img_src,
+                'thumbnail': thumbnail,
                 'links': links,
                 'data': data,
                 'type': get_tag_label(result.get('category'), result.get('type', ''), user_language),
@@ -218,13 +223,12 @@ def fetch_wikidata(nominatim_json, user_language):
     wikidata_ids = []
     wd_to_results = {}
     for result in nominatim_json:
-        e = result.get("extratags")
-        if e:
-            # ignore brand:wikidata
-            wd_id = e.get("wikidata", e.get("wikidata link"))
-            if wd_id and wd_id not in wikidata_ids:
-                wikidata_ids.append("wd:" + wd_id)
-                wd_to_results.setdefault(wd_id, []).append(result)
+        extratags = result['extratags']
+        # ignore brand:wikidata
+        wd_id = extratags.get('wikidata', extratags.get('wikidata link'))
+        if wd_id and wd_id not in wikidata_ids:
+            wikidata_ids.append('wd:' + wd_id)
+            wd_to_results.setdefault(wd_id, []).append(result)
 
     if wikidata_ids:
         user_language = 'en' if user_language == 'all' else user_language.split('-')[0]
@@ -334,12 +338,13 @@ def get_img_src(result):
             img_src = result['wikidata']['image_sign']
 
     # img_src
-    if not img_src and result.get('extratags', {}).get('image'):
-        img_src = result['extratags']['image']
-        del result['extratags']['image']
-    if not img_src and result.get('extratags', {}).get('wikimedia_commons'):
-        img_src = get_external_url('wikimedia_image', result['extratags']['wikimedia_commons'])
-        del result['extratags']['wikimedia_commons']
+    extratags = result['extratags']
+    if not img_src and extratags.get('image'):
+        img_src = extratags['image']
+        del extratags['image']
+    if not img_src and extratags.get('wikimedia_commons'):
+        img_src = get_external_url('wikimedia_image', extratags['wikimedia_commons'])
+        del extratags['wikimedia_commons']
 
     return img_src
 
@@ -348,20 +353,25 @@ def get_links(result, user_language):
     """Return links from result['extratags']"""
     links = []
     link_keys = set()
+    extratags = result['extratags']
+    if not extratags:
+        # minor optimization : no need to check VALUE_TO_LINK if extratags is empty
+        return links, link_keys
     for k, mapping_function in VALUE_TO_LINK.items():
-        raw_value = result['extratags'].get(k)
-        if raw_value:
-            url, url_label = mapping_function(raw_value)
-            if url.startswith('https://wikidata.org'):
-                url_label = result.get('wikidata', {}).get('itemLabel') or url_label
-            links.append(
-                {
-                    'label': get_key_label(k, user_language),
-                    'url': url,
-                    'url_label': url_label,
-                }
-            )
-            link_keys.add(k)
+        raw_value = extratags.get(k)
+        if not raw_value:
+            continue
+        url, url_label = mapping_function(raw_value)
+        if url.startswith('https://wikidata.org'):
+            url_label = result.get('wikidata', {}).get('itemLabel') or url_label
+        links.append(
+            {
+                'label': get_key_label(k, user_language),
+                'url': url,
+                'url_label': url_label,
+            }
+        )
+        link_keys.add(k)
     return links, link_keys
 
 
@@ -433,15 +443,15 @@ def get_key_label(key_name, lang):
     if key_name.startswith('currency:'):
         # currency:EUR --> get the name from the CURRENCIES variable
         # see https://wiki.openstreetmap.org/wiki/Key%3Acurrency
-        # and for exampe https://taginfo.openstreetmap.org/keys/currency:EUR#values
+        # and for example https://taginfo.openstreetmap.org/keys/currency:EUR#values
         # but there is also currency=EUR (currently not handled)
         # https://taginfo.openstreetmap.org/keys/currency#values
         currency = key_name.split(':')
         if len(currency) > 1:
-            o = CURRENCIES['iso4217'].get(currency)
+            o = CURRENCIES['iso4217'].get(currency[1])
             if o:
                 return get_label(o, lang).lower()
-            return currency
+            return currency[1]
 
     labels = OSM_KEYS_TAGS['keys']
     for k in key_name.split(':') + ['*']:

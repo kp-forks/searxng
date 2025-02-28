@@ -194,6 +194,7 @@ wait_key(){
     [[ -n $FORCE_TIMEOUT ]] && _t=$FORCE_TIMEOUT
     [[ -n $_t ]] && _t="-t $_t"
     printf "$msg"
+    # shellcheck disable=SC2229
     # shellcheck disable=SC2086
     read -r -s -n1 $_t || true
     echo
@@ -227,7 +228,7 @@ ask_yn() {
     while true; do
         clean_stdin
         printf "$1 ${choice} "
-        # shellcheck disable=SC2086
+        # shellcheck disable=SC2086,SC2229
         read -r -n1 $_t
         if [[ -z $REPLY ]]; then
             printf "$default\n"; break
@@ -261,7 +262,7 @@ tee_stderr () {
     if [[ -n $1 ]] ; then _t="$1"; fi
 
     (while read -r line; do
-         # shellcheck disable=SC2086
+         # shellcheck disable=SC2086,SC2229
          sleep $_t
          echo -e "$line" >&2
          echo "$line"
@@ -367,7 +368,7 @@ choose_one() {
         printf "$1 [${_BGreen}$default${_creset}] "
 
         if (( 10 > max )); then
-            # shellcheck disable=SC2086
+            # shellcheck disable=SC2086,SC2229
             read -r -n1 $_t
         else
             # shellcheck disable=SC2086,SC2229
@@ -662,8 +663,8 @@ pyenv.install() {
             pyenv
         fi
         for i in ${PYOBJECTS}; do
-    	    build_msg PYENV "[install] pip install -e '$i${PY_SETUP_EXTRAS}'"
-    	    "${PY_ENV_BIN}/python" -m pip install -e "$i${PY_SETUP_EXTRAS}"
+    	    build_msg PYENV "[install] pip install --use-pep517 --no-build-isolation -e '$i${PY_SETUP_EXTRAS}'"
+    	    "${PY_ENV_BIN}/python" -m pip install --use-pep517 --no-build-isolation -e "$i${PY_SETUP_EXTRAS}"
         done
     fi
     pyenv.install.OK
@@ -708,6 +709,7 @@ pyenv.uninstall() {
 	pyenv.cmd python setup.py develop --uninstall 2>&1 \
             | prefix_stdout "${_Blue}PYENV     ${_creset}[pyenv.uninstall] "
     else
+        # shellcheck disable=SC2086
 	pyenv.cmd python -m pip uninstall --yes ${PYOBJECTS} 2>&1 \
             | prefix_stdout "${_Blue}PYENV     ${_creset}[pyenv.uninstall] "
     fi
@@ -770,7 +772,7 @@ docs.clean() {
 
 docs.prebuild() {
     # Dummy function to run some actions before sphinx-doc build gets started.
-    # This finction needs to be overwritten by the application script.
+    # This function needs to be overwritten by the application script.
     true
     dump_return $?
 }
@@ -956,7 +958,6 @@ nginx_distro_setup() {
             ;;
     esac
 }
-nginx_distro_setup
 
 install_nginx(){
     info_msg "installing nginx ..."
@@ -1064,7 +1065,7 @@ nginx_remove_app() {
     # usage:  nginx_remove_app <myapp.conf>
 
     info_msg "remove nginx app: $1"
-    nginx_dissable_app "$1"
+    nginx_disable_app "$1"
     rm -f "${NGINX_APPS_AVAILABLE}/$1"
 }
 
@@ -1081,7 +1082,7 @@ nginx_enable_app() {
     nginx_reload
 }
 
-nginx_dissable_app() {
+nginx_disable_app() {
 
     # usage:  nginx_disable_app <myapp.conf>
 
@@ -1124,8 +1125,6 @@ apache_distro_setup() {
             ;;
     esac
 }
-
-apache_distro_setup
 
 install_apache(){
     info_msg "installing apache ..."
@@ -1193,7 +1192,7 @@ apache_remove_site() {
     # usage:  apache_remove_site <mysite.conf>
 
     info_msg "remove apache site: $1"
-    apache_dissable_site "$1"
+    apache_disable_site "$1"
     rm -f "${APACHE_SITES_AVAILABLE}/$1"
 }
 
@@ -1223,7 +1222,7 @@ apache_enable_site() {
     apache_reload
 }
 
-apache_dissable_site() {
+apache_disable_site() {
 
     # usage:  apache_disable_site <mysite.conf>
 
@@ -1288,8 +1287,6 @@ uWSGI_distro_setup() {
             ;;
 esac
 }
-
-uWSGI_distro_setup
 
 install_uwsgi(){
     info_msg "installing uwsgi ..."
@@ -1672,7 +1669,7 @@ EOF
 }
 
 # apt packages
-LXC_BASE_PACKAGES_debian="bash git build-essential python3 python3-venv"
+LXC_BASE_PACKAGES_debian="bash git build-essential python3 python3-venv python-is-python3"
 
 # pacman packages
 LXC_BASE_PACKAGES_arch="bash git base-devel python"
@@ -1683,13 +1680,15 @@ LXC_BASE_PACKAGES_fedora="bash git @development-tools python"
 # yum packages
 LXC_BASE_PACKAGES_centos="bash git python3"
 
-case $DIST_ID in
-    ubuntu|debian) LXC_BASE_PACKAGES="${LXC_BASE_PACKAGES_debian}" ;;
-    arch)          LXC_BASE_PACKAGES="${LXC_BASE_PACKAGES_arch}" ;;
-    fedora)        LXC_BASE_PACKAGES="${LXC_BASE_PACKAGES_fedora}" ;;
-    centos)        LXC_BASE_PACKAGES="${LXC_BASE_PACKAGES_centos}" ;;
-    *) err_msg "$DIST_ID-$DIST_VERS: pkg_install LXC_BASE_PACKAGES not yet implemented" ;;
-esac
+lxc_distro_setup() {
+    case $DIST_ID in
+        ubuntu|debian) LXC_BASE_PACKAGES="${LXC_BASE_PACKAGES_debian}" ;;
+        arch)          LXC_BASE_PACKAGES="${LXC_BASE_PACKAGES_arch}" ;;
+        fedora)        LXC_BASE_PACKAGES="${LXC_BASE_PACKAGES_fedora}" ;;
+        centos)        LXC_BASE_PACKAGES="${LXC_BASE_PACKAGES_centos}" ;;
+        *) err_msg "$DIST_ID-$DIST_VERS: pkg_install LXC_BASE_PACKAGES not yet implemented" ;;
+    esac
+}
 
 lxc_install_base_packages() {
     info_msg "install LXC_BASE_PACKAGES in container $1"

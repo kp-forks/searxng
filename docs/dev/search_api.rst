@@ -68,8 +68,8 @@ Parameters
   Proxy image results through SearXNG.
 
 ``autocomplete`` : default from :ref:`settings search`
-  [ ``google``, ``dbpedia``, ``duckduckgo``, ``startpage``, ``wikipedia``,
-  ``swisscows``, ``qwant`` ]
+  [ ``google``, ``dbpedia``, ``duckduckgo``, ``mwmbl``, ``startpage``,
+  ``wikipedia``, ``stract``, ``swisscows``, ``qwant`` ]
 
   Service which completes words as you type.
 
@@ -92,27 +92,25 @@ Parameters
   List of enabled plugins.
 
   :default:
-     ``Hash_plugin``, ``Search_on_category_select``,
-     ``Self_Information``, ``Tracker_URL_remover``,
-     ``Ahmia_blacklist``
+     ``Hash_plugin``, ``Self_Information``,
+     ``Tracker_URL_remover``, ``Ahmia_blacklist``
 
   :values:
      .. enabled by default
 
-     ``Hash_plugin``, ``Search_on_category_select``,
-     ``Self_Information``, ``Tracker_URL_remover``,
-     ``Ahmia_blacklist``,
+     ``Hash_plugin``, ``Self_Information``,
+     ``Tracker_URL_remover``, ``Ahmia_blacklist``,
 
      .. disabled by default
 
-     ``Hostname_replace``, ``Open_Access_DOI_rewrite``,
+     ``Hostnames_plugin``, ``Open_Access_DOI_rewrite``,
      ``Vim-like_hotkeys``, ``Tor_check_plugin``
 
 ``disabled_plugins``: optional
   List of disabled plugins.
 
   :default:
-     ``Hostname_replace``, ``Open_Access_DOI_rewrite``,
+     ``Hostnames_plugin``, ``Open_Access_DOI_rewrite``,
      ``Vim-like_hotkeys``, ``Tor_check_plugin``
 
   :values:

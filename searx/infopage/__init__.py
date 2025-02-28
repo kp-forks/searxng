@@ -1,6 +1,4 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
-# pyright: basic
 """Render SearXNG instance documentation.
 
 Usage in a Flask app route:
@@ -8,16 +6,19 @@ Usage in a Flask app route:
 .. code:: python
 
   from searx import infopage
+  from searx.extended_types import sxng_request
 
   _INFO_PAGES = infopage.InfoPageSet(infopage.MistletoePage)
 
   @app.route('/info/<pagename>', methods=['GET'])
   def info(pagename):
 
-      locale = request.preferences.get_value('locale')
+      locale = sxng_request.preferences.get_value('locale')
       page = _INFO_PAGES.get_page(pagename, locale)
 
 """
+
+from __future__ import annotations
 
 __all__ = ['InfoPage', 'InfoPageSet']
 
@@ -27,18 +28,28 @@ import logging
 import typing
 
 import urllib.parse
+from functools import cached_property
 import jinja2
 from flask.helpers import url_for
 from markdown_it import MarkdownIt
 
 from .. import get_setting
-from ..compat import cached_property
 from ..version import GIT_URL
 from ..locales import LOCALE_NAMES
 
 
 logger = logging.getLogger('searx.infopage')
 _INFO_FOLDER = os.path.abspath(os.path.dirname(__file__))
+INFO_PAGES: 'InfoPageSet'
+
+
+def __getattr__(name):
+    if name == 'INFO_PAGES':
+        global INFO_PAGES  # pylint: disable=global-statement
+        INFO_PAGES = InfoPageSet()
+        return INFO_PAGES
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class InfoPage:
@@ -55,7 +66,7 @@ class InfoPage:
 
     @cached_property
     def content(self):
-        """Content of the page (rendered in a Jinja conntext)"""
+        """Content of the page (rendered in a Jinja context)"""
         ctx = self.get_ctx()
         template = jinja2.Environment().from_string(self.raw_content)
         return template.render(**ctx)
@@ -119,7 +130,7 @@ class InfoPageSet:  # pylint: disable=too-few-public-methods
     ):
         self.page_class = page_class or InfoPage
         self.folder: str = info_folder or _INFO_FOLDER
-        """location of the Markdwon files"""
+        """location of the Markdown files"""
 
         self.CACHE: typing.Dict[tuple, typing.Optional[InfoPage]] = {}
 

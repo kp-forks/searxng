@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
 """This is the implementation of the Google News engine.
 
 Google News has a different region handling compared to Google WEB.
@@ -27,10 +26,8 @@ The google news API ignores some parameters from the common :ref:`google API`:
 
 from typing import TYPE_CHECKING
 
-import binascii
-import re
 from urllib.parse import urlencode
-from base64 import b64decode
+import base64
 from lxml import html
 import babel
 
@@ -74,7 +71,7 @@ time_range_support = False
 # Google-News results are always *SafeSearch*. Option 'safesearch' is set to
 # False here, otherwise checker will report safesearch-errors::
 #
-#  safesearch : results are identitical for safesearch=0 and safesearch=2
+#  safesearch : results are identical for safesearch=0 and safesearch=2
 safesearch = True
 # send_accept_language_header = True
 
@@ -144,37 +141,20 @@ def response(resp):
 
     for result in eval_xpath_list(dom, '//div[@class="xrnccd"]'):
 
-        # The first <a> tag in the <article> contains the link to the
-        # article The href attribute of the <a> is a google internal link,
-        # we can't use.  The real link is hidden in the jslog attribute:
-        #
-        #   <a ...
-        #      jslog="95014; 4:https://www.cnn.com/.../index.html; track:click"
-        #      href="./articles/CAIiENu3nGS...?hl=en-US&amp;gl=US&amp;ceid=US%3Aen"
-        #      ... />
+        # The first <a> tag in the <article> contains the link to the article
+        # The href attribute of the <a> tag is a google internal link, we have
+        # to decode
 
-        jslog = eval_xpath_getindex(result, './article/a/@jslog', 0)
-        url = re.findall('http[^;]*', jslog)
-        if url:
-            url = url[0]
-        else:
-            # The real URL is base64 encoded in the json attribute:
-            # jslog="95014; 5:W251bGwsbnVsbCxudW...giXQ==; track:click"
-            jslog = jslog.split(";")[1].split(':')[1].strip()
-            try:
-                padding = (4 - (len(jslog) % 4)) * "="
-                jslog = b64decode(jslog + padding)
-            except binascii.Error:
-                # URL can't be read, skip this result
-                continue
+        href = eval_xpath_getindex(result, './article/a/@href', 0)
+        href = href.split('?')[0]
+        href = href.split('/')[-1]
+        href = base64.urlsafe_b64decode(href + '====')
+        href = href[href.index(b'http') :].split(b'\xd2')[0]
+        href = href.decode()
 
-            # now we have : b'[null, ... null,"https://www.cnn.com/.../index.html"]'
-            url = re.findall('http[^;"]*', str(jslog))[0]
-
-        # the first <h3> tag in the <article> contains the title of the link
         title = extract_text(eval_xpath(result, './article/h3[1]'))
 
-        # The pub_date is mostly a string like 'yesertday', not a real
+        # The pub_date is mostly a string like 'yesterday', not a real
         # timezone date or time.  Therefore we can't use publishedDate.
         pub_date = extract_text(eval_xpath(result, './article//time'))
         pub_origin = extract_text(eval_xpath(result, './article//a[@data-n-tid]'))
@@ -185,14 +165,14 @@ def response(resp):
         # "https://lh3.googleusercontent.com/DjhQh7DMszk.....z=-p-h100-w100"
         # These URL are long but not personalized (double checked via tor).
 
-        img_src = extract_text(result.xpath('preceding-sibling::a/figure/img/@src'))
+        thumbnail = extract_text(result.xpath('preceding-sibling::a/figure/img/@src'))
 
         results.append(
             {
-                'url': url,
+                'url': href,
                 'title': title,
                 'content': content,
-                'img_src': img_src,
+                'thumbnail': thumbnail,
             }
         )
 

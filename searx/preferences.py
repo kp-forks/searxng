@@ -1,31 +1,46 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
 """Searx preferences implementation.
 """
+from __future__ import annotations
 
 # pylint: disable=useless-object-inheritance
 
 from base64 import urlsafe_b64encode, urlsafe_b64decode
 from zlib import compress, decompress
 from urllib.parse import parse_qs, urlencode
-from typing import Iterable, Dict, List
+from typing import Iterable, Dict, List, Optional
+from collections import OrderedDict
 
 import flask
+import babel
 
-from searx import settings, autocomplete
+import searx.plugins
+
+from searx import settings, autocomplete, favicons
 from searx.enginelib import Engine
-from searx.plugins import Plugin
+from searx.engines import DEFAULT_CATEGORY
+from searx.extended_types import SXNG_Request
 from searx.locales import LOCALE_NAMES
 from searx.webutils import VALID_LANGUAGE_CODE
-from searx.engines import OTHER_CATEGORY
 
 
 COOKIE_MAX_AGE = 60 * 60 * 24 * 365 * 5  # 5 years
 DOI_RESOLVERS = list(settings['doi_resolvers'])
 
+MAP_STR2BOOL: Dict[str, bool] = OrderedDict(
+    [
+        ('0', False),
+        ('1', True),
+        ('on', True),
+        ('off', False),
+        ('True', True),
+        ('False', False),
+        ('none', False),
+    ]
+)
+
 
 class ValidationException(Exception):
-
     """Exption from ``cls.__init__`` when configuration value is invalid."""
 
 
@@ -198,6 +213,26 @@ class MapSetting(Setting):
             resp.set_cookie(name, self.key, max_age=COOKIE_MAX_AGE)
 
 
+class BooleanSetting(Setting):
+    """Setting of a boolean value that has to be translated in order to be storable"""
+
+    def normalized_str(self, val):
+        for v_str, v_obj in MAP_STR2BOOL.items():
+            if val == v_obj:
+                return v_str
+        raise ValueError("Invalid value: %s (%s) is not a boolean!" % (repr(val), type(val)))
+
+    def parse(self, data: str):
+        """Parse and validate ``data`` and store the result at ``self.value``"""
+        self.value = MAP_STR2BOOL[data]
+        self.key = self.normalized_str(self.value)  # pylint: disable=attribute-defined-outside-init
+
+    def save(self, name: str, resp: flask.Response):
+        """Save cookie ``name`` in the HTTP response object"""
+        if hasattr(self, 'key'):
+            resp.set_cookie(name, self.key, max_age=COOKIE_MAX_AGE)
+
+
 class BooleanChoices:
     """Maps strings to booleans that are either true or false."""
 
@@ -259,7 +294,7 @@ class EnginesSetting(BooleanChoices):
         choices = {}
         for engine in engines:
             for category in engine.categories:
-                if not category in list(settings['categories_as_tabs'].keys()) + [OTHER_CATEGORY]:
+                if not category in list(settings['categories_as_tabs'].keys()) + [DEFAULT_CATEGORY]:
                     continue
                 choices['{}__{}'.format(engine.name, category)] = not engine.disabled
         super().__init__(default_value, choices)
@@ -280,17 +315,76 @@ class EnginesSetting(BooleanChoices):
 class PluginsSetting(BooleanChoices):
     """Plugin settings"""
 
-    def __init__(self, default_value, plugins: Iterable[Plugin]):
+    def __init__(self, default_value, plugins: Iterable[searx.plugins.Plugin]):
         super().__init__(default_value, {plugin.id: plugin.default_on for plugin in plugins})
 
     def transform_form_items(self, items):
         return [item[len('plugin_') :] for item in items]
 
 
+class ClientPref:
+    """Container to assemble client prefferences and settings."""
+
+    # hint: searx.webapp.get_client_settings should be moved into this class
+
+    locale: babel.Locale
+    """Locale preferred by the client."""
+
+    def __init__(self, locale: Optional[babel.Locale] = None):
+        self.locale = locale
+
+    @property
+    def locale_tag(self):
+        if self.locale is None:
+            return None
+        tag = self.locale.language
+        if self.locale.territory:
+            tag += '-' + self.locale.territory
+        return tag
+
+    @classmethod
+    def from_http_request(cls, http_request: SXNG_Request):
+        """Build ClientPref object from HTTP request.
+
+        - `Accept-Language used for locale setting
+          <https://www.w3.org/International/questions/qa-accept-lang-locales.en>`__
+
+        """
+        al_header = http_request.headers.get("Accept-Language")
+        if not al_header:
+            return cls(locale=None)
+
+        pairs = []
+        for l in al_header.split(','):
+            # fmt: off
+            lang, qvalue = [_.strip() for _ in (l.split(';') + ['q=1',])[:2]]
+            # fmt: on
+            try:
+                qvalue = float(qvalue.split('=')[-1])
+                locale = babel.Locale.parse(lang, sep='-')
+            except (ValueError, babel.core.UnknownLocaleError):
+                continue
+            pairs.append((locale, qvalue))
+
+        locale = None
+        if pairs:
+            pairs.sort(reverse=True, key=lambda x: x[1])
+            locale = pairs[0][0]
+        return cls(locale=locale)
+
+
 class Preferences:
     """Validates and saves preferences to cookies"""
 
-    def __init__(self, themes: List[str], categories: List[str], engines: Dict[str, Engine], plugins: Iterable[Plugin]):
+    def __init__(
+        self,
+        themes: list[str],
+        categories: list[str],
+        engines: dict[str, Engine],
+        plugins: searx.plugins.PluginStorage,
+        client: ClientPref | None = None,
+    ):
+
         super().__init__()
 
         self.key_value_settings: Dict[str, Setting] = {
@@ -315,16 +409,14 @@ class Preferences:
                 locked=is_locked('autocomplete'),
                 choices=list(autocomplete.backends.keys()) + ['']
             ),
-            'image_proxy': MapSetting(
+            'favicon_resolver': EnumStringSetting(
+                settings['search']['favicon_resolver'],
+                locked=is_locked('favicon_resolver'),
+                choices=list(favicons.proxy.CFG.resolver_map.keys()) + ['']
+            ),
+            'image_proxy': BooleanSetting(
                 settings['server']['image_proxy'],
-                locked=is_locked('image_proxy'),
-                map={
-                    '': settings['server']['image_proxy'],
-                    '0': False,
-                    '1': True,
-                    'True': True,
-                    'False': False
-                }
+                locked=is_locked('image_proxy')
             ),
             'method': EnumStringSetting(
                 settings['server']['method'],
@@ -345,15 +437,9 @@ class Preferences:
                 locked=is_locked('theme'),
                 choices=themes
             ),
-            'results_on_new_tab': MapSetting(
+            'results_on_new_tab': BooleanSetting(
                 settings['ui']['results_on_new_tab'],
-                locked=is_locked('results_on_new_tab'),
-                map={
-                    '0': False,
-                    '1': True,
-                    'False': False,
-                    'True': True
-                }
+                locked=is_locked('results_on_new_tab')
             ),
             'doi_resolver': MultipleChoiceSetting(
                 [settings['default_doi_resolver'], ],
@@ -363,50 +449,35 @@ class Preferences:
             'simple_style': EnumStringSetting(
                 settings['ui']['theme_args']['simple_style'],
                 locked=is_locked('simple_style'),
-                choices=['', 'auto', 'light', 'dark']
+                choices=['', 'auto', 'light', 'dark', 'black']
             ),
-            'center_alignment': MapSetting(
+            'center_alignment': BooleanSetting(
                 settings['ui']['center_alignment'],
-                locked=is_locked('center_alignment'),
-                map={
-                    '0': False,
-                    '1': True,
-                    'False': False,
-                    'True': True
-                }
+                locked=is_locked('center_alignment')
             ),
-            'advanced_search': MapSetting(
+            'advanced_search': BooleanSetting(
                 settings['ui']['advanced_search'],
-                locked=is_locked('advanced_search'),
-                map={
-                    '0': False,
-                    '1': True,
-                    'False': False,
-                    'True': True,
-                    'on': True,
-                }
+                locked=is_locked('advanced_search')
             ),
-            'query_in_title': MapSetting(
+            'query_in_title': BooleanSetting(
                 settings['ui']['query_in_title'],
-                locked=is_locked('query_in_title'),
-                map={
-                    '': settings['ui']['query_in_title'],
-                    '0': False,
-                    '1': True,
-                    'True': True,
-                    'False': False
-                }
+                locked=is_locked('query_in_title')
             ),
-            'infinite_scroll': MapSetting(
+            'infinite_scroll': BooleanSetting(
                 settings['ui']['infinite_scroll'],
-                locked=is_locked('infinite_scroll'),
-                map={
-                    '': settings['ui']['infinite_scroll'],
-                    '0': False,
-                    '1': True,
-                    'True': True,
-                    'False': False
-                }
+                locked=is_locked('infinite_scroll')
+            ),
+            'search_on_category_select': BooleanSetting(
+                settings['ui']['search_on_category_select'],
+                locked=is_locked('search_on_category_select')
+            ),
+            'hotkeys': EnumStringSetting(
+                settings['ui']['hotkeys'],
+                choices=['default', 'vim']
+            ),
+            'url_formatting': EnumStringSetting(
+                settings['ui']['url_formatting'],
+                choices=['pretty', 'full', 'host']
             ),
             # fmt: on
         }
@@ -414,7 +485,7 @@ class Preferences:
         self.engines = EnginesSetting('engines', engines=engines.values())
         self.plugins = PluginsSetting('plugins', plugins=plugins)
         self.tokens = SetSetting('tokens')
-        self.unknown_params: Dict[str, str] = {}
+        self.client = client or ClientPref()
 
     def get_as_url_params(self):
         """Return preferences as URL parameters"""
@@ -458,16 +529,19 @@ class Preferences:
                 self.plugins.parse_cookie(input_data.get('disabled_plugins', ''), input_data.get('enabled_plugins', ''))
             elif user_setting_name == 'tokens':
                 self.tokens.parse(user_setting)
-            elif not any(
-                user_setting_name.startswith(x) for x in ['enabled_', 'disabled_', 'engine_', 'category_', 'plugin_']
-            ):
-                self.unknown_params[user_setting_name] = user_setting
 
     def parse_form(self, input_data: Dict[str, str]):
         """Parse formular (``<input>``) data from a ``flask.request.form``"""
         disabled_engines = []
         enabled_categories = []
         disabled_plugins = []
+
+        # boolean preferences are not sent by the form if they're false,
+        # so we have to add them as false manually if they're not sent (then they would be true)
+        for key, setting in self.key_value_settings.items():
+            if key not in input_data.keys() and isinstance(setting, BooleanSetting):
+                input_data[key] = 'False'
+
         for user_setting_name, user_setting in input_data.items():
             if user_setting_name in self.key_value_settings:
                 self.key_value_settings[user_setting_name].parse(user_setting)
@@ -479,8 +553,7 @@ class Preferences:
                 disabled_plugins.append(user_setting_name)
             elif user_setting_name == 'tokens':
                 self.tokens.parse_form(user_setting)
-            else:
-                self.unknown_params[user_setting_name] = user_setting
+
         self.key_value_settings['categories'].parse_form(enabled_categories)
         self.engines.parse_form(disabled_engines)
         self.plugins.parse_form(disabled_plugins)
@@ -491,8 +564,6 @@ class Preferences:
         ret_val = None
         if user_setting_name in self.key_value_settings:
             ret_val = self.key_value_settings[user_setting_name].get_value()
-        if user_setting_name in self.unknown_params:
-            ret_val = self.unknown_params[user_setting_name]
         return ret_val
 
     def save(self, resp: flask.Response):
@@ -505,8 +576,6 @@ class Preferences:
         self.engines.save(resp)
         self.plugins.save(resp)
         self.tokens.save('tokens', resp)
-        for k, v in self.unknown_params.items():
-            resp.set_cookie(k, v, max_age=COOKIE_MAX_AGE)
         return resp
 
     def validate_token(self, engine):

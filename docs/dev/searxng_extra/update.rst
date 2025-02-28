@@ -60,6 +60,7 @@ Scripts to update static data in :origin:`searx/data/`
 .. automodule:: searxng_extra.update.update_engine_traits
   :members:
 
+.. _update_osm_keys_tags.py:
 
 ``update_osm_keys_tags.py``
 ===========================
@@ -76,6 +77,16 @@ Scripts to update static data in :origin:`searx/data/`
 :origin:`[source] <searxng_extra/update/update_pygments.py>`
 
 .. automodule:: searxng_extra.update.update_pygments
+  :members:
+
+.. _update_locales.py:
+
+``update_locales.py``
+=====================
+
+:origin:`[source] <searxng_extra/update/update_locales.py>`
+
+.. automodule:: searxng_extra.update.update_locales
   :members:
 
 

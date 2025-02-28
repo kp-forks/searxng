@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
 """Docker Hub (IT)
 
 """
 # pylint: disable=use-dict-literal
 
-from json import loads
 from urllib.parse import urlencode
 from dateutil import parser
 
@@ -18,17 +16,20 @@ about = {
     "results": 'JSON',
 }
 
-categories = ['it']  # optional
+categories = ['it', 'packages']  # optional
 paging = True
 
-base_url = "https://hub.docker.com/"
-search_url = base_url + "api/content/v1/products/search?{query}&type=image&page_size=25"
+base_url = "https://hub.docker.com"
+page_size = 10
 
 
 def request(query, params):
-
-    params['url'] = search_url.format(query=urlencode(dict(q=query, page=params["pageno"])))
-    params["headers"]["Search-Version"] = "v3"
+    args = {
+        "query": query,
+        "from": page_size * (params['pageno'] - 1),
+        "size": page_size,
+    }
+    params['url'] = f"{base_url}/api/search/v3/catalog/search?{urlencode(args)}"
 
     return params
 
@@ -38,26 +39,33 @@ def response(resp):
     resp: requests response object
     '''
     results = []
-    body = loads(resp.text)
+    json_resp = resp.json()
 
-    # Make sure `summaries` isn't `null`
-    search_res = body.get("summaries")
-    if search_res:
-        for item in search_res:
-            result = {}
+    for item in json_resp.get("results", []):
+        image_source = item.get("source")
+        is_official = image_source in ["store", "official"]
 
-            # Make sure correct URL is set
-            filter_type = item.get("filter_type")
-            is_official = filter_type in ["store", "official"]
+        popularity_infos = [f"{item.get('star_count', 0)} stars"]
 
-            if is_official:
-                result["url"] = base_url + "_/" + item.get('slug', "")
-            else:
-                result["url"] = base_url + "r/" + item.get('slug', "")
-            result["title"] = item.get("name")
-            result["content"] = item.get("short_description")
-            result["publishedDate"] = parser.parse(item.get("updated_at") or item.get("created_at"))
-            result["thumbnail"] = item["logo_url"].get("large") or item["logo_url"].get("small")
-            results.append(result)
+        architectures = []
+        for rate_plan in item.get("rate_plans", []):
+            pull_count = rate_plan.get("repositories", [{}])[0].get("pull_count")
+            if pull_count:
+                popularity_infos.insert(0, f"{pull_count} pulls")
+            architectures.extend(arch['name'] for arch in rate_plan.get("architectures", []) if arch['name'])
+
+        result = {
+            'template': 'packages.html',
+            'url': base_url + ("/_/" if is_official else "/r/") + item.get("slug", ""),
+            'title': item.get("name"),
+            'content': item.get("short_description"),
+            'thumbnail': item["logo_url"].get("large") or item["logo_url"].get("small"),
+            'package_name': item.get("name"),
+            'maintainer': item["publisher"].get("name"),
+            'publishedDate': parser.parse(item.get("updated_at") or item.get("created_at")),
+            'popularity': ', '.join(popularity_infos),
+            'tags': architectures,
+        }
+        results.append(result)
 
     return results

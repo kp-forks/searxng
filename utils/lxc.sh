@@ -4,8 +4,6 @@
 
 # shellcheck source=utils/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-# shellcheck source=utils/brand.env
-source "${REPO_ROOT}/utils/brand.env"
 
 # load environment of the LXC suite
 LXC_ENV="${LXC_ENV:-${REPO_ROOT}/utils/lxc-searxng.env}"
@@ -137,6 +135,8 @@ main() {
     local exit_val
     local _usage="unknown or missing $1 command $2"
 
+    lxc_distro_setup
+
     # don't check prerequisite when in recursion
     if [[ ! $1 == __* ]] && [[ ! $1 == --help  ]]; then
         if ! in_container; then
@@ -159,7 +159,7 @@ main() {
             ;;
         copy)
             case $2 in
-                ''|images) lxc_copy_images_localy;;
+                ''|images) lxc_copy_images_locally;;
                 *) usage "$_usage"; exit 42;;
             esac
             ;;
@@ -167,7 +167,7 @@ main() {
             sudo_or_exit
             case $2 in
                 ''|--|containers) remove_containers ;;
-                images) lxc_delete_images_localy ;;
+                images) lxc_delete_images_locally ;;
                 ${LXC_HOST_PREFIX}-*)
                     ! lxc_exists "$2" && warn_msg "container not yet exists: $2" && exit 0
                     if ask_yn "Do you really want to delete container $2"; then
@@ -291,7 +291,7 @@ build_all_containers() {
     rst_title "Build all LXC containers of suite"
     echo
     usage_containers
-    lxc_copy_images_localy
+    lxc_copy_images_locally
     lxc_init_all_containers
     lxc_config_all_containers
     lxc_boilerplate_all_containers
@@ -361,7 +361,7 @@ remove_containers() {
 # images
 # ------
 
-lxc_copy_images_localy() {
+lxc_copy_images_locally() {
     rst_title "copy images" section
     for ((i=0; i<${#LXC_SUITE[@]}; i+=2)); do
         lxc_image_copy "${LXC_SUITE[i]}" "${LXC_SUITE[i+1]}"
@@ -369,7 +369,7 @@ lxc_copy_images_localy() {
     # lxc image list local: && wait_key
 }
 
-lxc_delete_images_localy() {
+lxc_delete_images_locally() {
     rst_title "Delete LXC images"
     rst_para "local existing images"
     echo
@@ -556,7 +556,7 @@ EOF
 check_connectivity() {
     local ret_val=0
     info_msg "check internet connectivity ..."
-    if ! lxc exec "${1}" -- ping -c 1 8.8.8.8 &>/dev/null; then
+    if ! lxc exec "${1}" -- ping -c 1 9.9.9.9 &>/dev/null; then
         ret_val=1
         err_msg "no internet connectivity!"
         info_msg "Most often the connectivity is blocked by a docker installation:"

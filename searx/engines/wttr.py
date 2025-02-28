@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
 """wttr.in (weather forecast service)"""
 
 from json import loads
@@ -15,7 +14,7 @@ about = {
     "results": "JSON",
 }
 
-categories = ["others"]
+categories = ["weather"]
 
 url = "https://wttr.in/{query}?format=j1&lang={lang}"
 

@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# lint: pylint
-
-"""Abstract base classes for engine request processores.
+"""Abstract base classes for engine request processors.
 
 """
 
@@ -58,7 +56,7 @@ class SuspendedStatus:
 
 
 class EngineProcessor(ABC):
-    """Base classes used for all types of reqest processores."""
+    """Base classes used for all types of request processors."""
 
     __slots__ = 'engine', 'engine_name', 'lock', 'suspended_status', 'logger'
 
@@ -74,7 +72,7 @@ class EngineProcessor(ABC):
         try:
             self.engine.init(get_engine_from_settings(self.engine_name))
         except SearxEngineResponseException as exc:
-            self.logger.warn('Fail to initialize // %s', exc)
+            self.logger.warning('Fail to initialize // %s', exc)
         except Exception:  # pylint: disable=broad-except
             self.logger.exception('Fail to initialize')
         else:
@@ -150,11 +148,17 @@ class EngineProcessor(ABC):
         if search_query.pageno > 1 and not self.engine.paging:
             return None
 
+        # if max page is reached, skip
+        max_page = self.engine.max_page or settings['search']['max_page']
+        if max_page and max_page < search_query.pageno:
+            return None
+
         # if time_range is not supported, skip
         if search_query.time_range and not self.engine.time_range_support:
             return None
 
         params = {}
+        params["query"] = search_query.query
         params['category'] = engine_category
         params['pageno'] = search_query.pageno
         params['safesearch'] = search_query.safesearch
@@ -165,7 +169,7 @@ class EngineProcessor(ABC):
         # deprecated / vintage --> use params['searxng_locale']
         #
         # Conditions related to engine's traits are implemented in engine.traits
-        # module. Don't do 'locale' decissions here in the abstract layer of the
+        # module. Don't do 'locale' decisions here in the abstract layer of the
         # search processor, just pass the value from user's choice unchanged to
         # the engine request.
 
